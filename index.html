@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Умные весы -> Telegram</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #121212;
+            color: #ffffff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+            text-align: center;
+        }
+        .card {
+            background: #1e1e1e;
+            padding: 30px 20px;
+            border-radius: 20px;
+            width: 100%;
+            max-width: 360px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+        }
+        input {
+            width: 100%;
+            padding: 12px;
+            margin-top: 10px;
+            border-radius: 10px;
+            border: 1px solid #444;
+            background: #2c2c2c;
+            color: white;
+            box-sizing: border-box;
+            font-size: 14px;
+        }
+        button {
+            background-color: #2aabee;
+            color: white;
+            border: none;
+            padding: 16px 24px;
+            font-size: 18px;
+            font-weight: bold;
+            border-radius: 12px;
+            cursor: pointer;
+            width: 100%;
+            margin-top: 15px;
+        }
+        button.secondary {
+            background-color: #333;
+            font-size: 14px;
+            padding: 10px;
+        }
+        button:disabled { background-color: #555; cursor: not-allowed; }
+        #weight-display {
+            font-size: 48px;
+            font-weight: bold;
+            margin: 20px 0 10px;
+            color: #4caf50;
+        }
+        #status {
+            color: #aaaaaa;
+            font-size: 14px;
+            min-height: 40px;
+        }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h2>⚖️ Mi Scale Bot</h2>
+    
+    <!-- Блок настройки токена (показывается, если токен еще не сохранен) -->
+    <div id="setup-box">
+        <p style="font-size: 13px; color: #bbb;">Введите токен бота (сохранится только в памяти этого телефона):</p>
+        <input type="password" id="token-input" placeholder="123456789:ABCdef...">
+        <button onclick="saveToken()">Сохранить токен</button>
+    </div>
+
+    <!-- Основной экран взвешивания -->
+    <div id="main-box" class="hidden">
+        <div id="weight-display">--.-- кг</div>
+        <div id="status">Нажмите кнопку и встаньте на весы</div>
+        <button id="scan-btn" onclick="startScan()">Взвеситься</button>
+        <button class="secondary" onclick="resetToken()">Сбросить токен</button>
+    </div>
+</div>
+
+<script>
+    // В коде больше НЕТ токена!
+    const ADMIN_CHAT_ID = "123456789";
+
+    const USERS = [
+        { name: "Алексей", min: 75.0, max: 86.0, chat_id: "123456789" },
+        { name: "Анна",    min: 50.0, max: 62.0, chat_id: "987654321" }
+    ];
+
+    const SCALE_UUID = 0x181b;
+    let lastSendTime = 0;
+
+    // Проверяем, сохранен ли токен в браузере при загрузке
+    window.onload = () => {
+        const savedToken = localStorage.getItem('tg_bot_token');
+        if (savedToken) {
+            document.getElementById('setup-box').classList.add('hidden');
+            document.getElementById('main-box').classList.remove('hidden');
+        }
+    };
+
+    function saveToken() {
+        const token = document.getElementById('token-input').value.trim();
+        if (!token.includes(':')) {
+            alert('Неверный формат токена');
+            return;
+        }
+        localStorage.setItem('tg_bot_token', token);
+        document.getElementById('setup-box').classList.add('hidden');
+        document.getElementById('main-box').classList.remove('hidden');
+    }
+
+    function resetToken() {
+        localStorage.removeItem('tg_bot_token');
+        location.reload();
+    }
+
+    function getUserByWeight(weight) {
+        return USERS.find(u => weight >= u.min && weight <= u.max) || null;
+    }
+
+    async function sendToTelegram(text, chatId) {
+        const botToken = localStorage.getItem('tg_bot_token');
+        const url = `https://telegram.org{botToken}/sendMessage`;
+        
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    chat_id: chatId,
+                    text: text,
+                    parse_mode: 'Markdown'
+                })
+            });
+            const data = await response.json();
+            if (!data.ok) {
+                document.getElementById('status').innerText = `Ошибка Telegram: ${data.description}`;
+            } else {
+                document.getElementById('status').innerText = "✅ Отправлено в Telegram!";
+            }
+        } catch (err) {
+            document.getElementById('status').innerText = `Ошибка сети: ${err.message}`;
+        }
+    }
+
+    async function startScan() {
+        const statusEl = document.getElementById('status');
+        const btn = document.getElementById('scan-btn');
+
+        if (!navigator.bluetooth || !navigator.bluetooth.requestLEScan) {
+            statusEl.innerText = "❌ Включите Experimental Web Platform features в chrome://flags и откройте сайт по HTTPS";
+            return;
+        }
+
+        try {
+            btn.disabled = true;
+            statusEl.innerText = "🔍 Ищу весы... Встаньте на них босиком";
+
+            const scan = await navigator.bluetooth.requestLEScan({
+                filters: [{ services: [SCALE_UUID] }],
+                keepRepeatedDevices: true
+            });
+
+            navigator.bluetooth.addEventListener('advertisementreceived', event => {
+                const serviceData = event.serviceData.get(SCALE_UUID) || 
+                                    event.serviceData.get("0000181b-0000-1000-8000-00805f9b34fb");
+                
+                if (!serviceData || serviceData.byteLength < 13) return;
+
+                const ctrlByte0 = serviceData.getUint8(0);
+                const ctrlByte1 = serviceData.getUint8(1);
+
+                const isStabilized = (ctrlByte1 & (1 << 5)) !== 0;
+                const hasImpedance = (ctrlByte1 & (1 << 1)) !== 0;
+
+                const rawWeight = serviceData.getUint16(11, true);
+                const isLbs = (ctrlByte0 & 0x01) !== 0;
+                const weight = isLbs ? (rawWeight / 100).toFixed(2) : (rawWeight / 200).toFixed(2);
+
+                document.getElementById('weight-display').innerText = `${weight} кг`;
+
+                if (isStabilized) {
+                    const now = Date.now();
+                    if (now - lastSendTime < 15000) return;
+                    lastSendTime = now;
+
+                    let impedance = null;
+                    if (hasImpedance) {
+                        impedance = serviceData.getUint16(9, true);
+                    }
+
+                    const numWeight = parseFloat(weight);
+                    const matchedUser = getUserByWeight(numWeight);
+                    const targetId = matchedUser ? matchedUser.chat_id : ADMIN_CHAT_ID;
+                    const header = matchedUser 
+                        ? `⚖️ **Новый замер для ${matchedUser.name}**` 
+                        : `⚖️ **Новый замер (неизвестный пользователь)**`;
+
+                    let msg = `${header}\n• Вес: \`${weight} кг\``;
+                    if (impedance && impedance > 0) {
+                        msg += `\n• Импеданс: \`${impedance} Ом\``;
+                    } else {
+                        msg += `\n• Импеданс: _не измерен (вставайте босиком)_`;
+                    }
+
+                    statusEl.innerText = "⏳ Вес зафиксирован, отправляю...";
+                    sendToTelegram(msg, targetId);
+                    scan.stop();
+                    btn.disabled = false;
+                }
+            });
+
+        } catch (error) {
+            statusEl.innerText = `Ошибка Bluetooth: ${error.message}`;
+            btn.disabled = false;
+        }
+    }
+</script>
+
+</body>
+</html>
