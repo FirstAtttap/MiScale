@@ -67,6 +67,15 @@
             font-size: 14px;
             min-height: 40px;
         }
+        .user-badge {
+            background: #2c2c2c;
+            padding: 6px 12px;
+            border-radius: 8px;
+            font-size: 13px;
+            color: #2aabee;
+            display: inline-block;
+            margin-bottom: 10px;
+        }
         .hidden { display: none; }
     </style>
 </head>
@@ -75,65 +84,73 @@
 <div class="card">
     <h2>⚖️ Mi Scale Bot</h2>
     
-    <!-- Блок настройки токена (показывается, если токен еще не сохранен) -->
+    <!-- Экран первичной настройки (на каждом телефоне свой) -->
     <div id="setup-box">
-        <p style="font-size: 13px; color: #bbb;">Введите токен бота (сохранится только в памяти этого телефона):</p>
-        <input type="password" id="token-input" placeholder="123456789:ABCdef...">
-        <button onclick="saveToken()">Сохранить токен</button>
+        <p style="font-size: 13px; color: #bbb;">Настройка профиля (данные сохранятся только в памяти этого телефона):</p>
+        <input type="text" id="name-input" placeholder="Ваше имя (например, Алексей)">
+        <input type="password" id="token-input" placeholder="Токен бота (123456:ABC...)">
+        <input type="text" id="chatid-input" placeholder="Ваш личный Chat ID (из @userinfobot)">
+        <button onclick="saveProfile()">Сохранить профиль</button>
     </div>
 
     <!-- Основной экран взвешивания -->
     <div id="main-box" class="hidden">
+        <div id="user-label" class="user-badge"></div>
         <div id="weight-display">--.-- кг</div>
         <div id="status">Нажмите кнопку и встаньте на весы</div>
         <button id="scan-btn" onclick="startScan()">Взвеситься</button>
-        <button class="secondary" onclick="resetToken()">Сбросить токен</button>
+        <button class="secondary" onclick="resetProfile()">Изменить настройки</button>
     </div>
 </div>
 
 <script>
-    // В коде больше НЕТ токена!
-    const ADMIN_CHAT_ID = "123456789";
-
-    const USERS = [
-        { name: "Алексей", min: 75.0, max: 86.0, chat_id: "123456789" },
-        { name: "Анна",    min: 50.0, max: 62.0, chat_id: "987654321" }
-    ];
-
     const SCALE_UUID = 0x181b;
     let lastSendTime = 0;
 
-    // Проверяем, сохранен ли токен в браузере при загрузке
+    // Проверяем наличие сохраненного профиля при открытии страницы
     window.onload = () => {
-        const savedToken = localStorage.getItem('tg_bot_token');
-        if (savedToken) {
+        const token = localStorage.getItem('tg_bot_token');
+        const chatId = localStorage.getItem('tg_chat_id');
+        const userName = localStorage.getItem('tg_user_name') || 'Пользователь';
+
+        if (token && chatId) {
+            document.getElementById('user-label').innerText = `👤 Профиль: ${userName}`;
             document.getElementById('setup-box').classList.add('hidden');
             document.getElementById('main-box').classList.remove('hidden');
         }
     };
 
-    function saveToken() {
+    function saveProfile() {
+        const name = document.getElementById('name-input').value.trim() || 'Пользователь';
         const token = document.getElementById('token-input').value.trim();
+        const chatId = document.getElementById('chatid-input').value.trim();
+
         if (!token.includes(':')) {
-            alert('Неверный формат токена');
+            alert('Проверьте формат токена бота (должно быть двоеточие)');
             return;
         }
-        localStorage.setItem('tg_bot_token', token);
-        document.getElementById('setup-box').classList.add('hidden');
-        document.getElementById('main-box').classList.remove('hidden');
-    }
+        if (!chatId || isNaN(chatId)) {
+            alert('Chat ID должен состоять только из цифр (узнайте его у @userinfobot)');
+            return;
+        }
 
-    function resetToken() {
-        localStorage.removeItem('tg_bot_token');
+        localStorage.setItem('tg_user_name', name);
+        localStorage.setItem('tg_bot_token', token);
+        localStorage.setItem('tg_chat_id', chatId);
+        
         location.reload();
     }
 
-    function getUserByWeight(weight) {
-        return USERS.find(u => weight >= u.min && weight <= u.max) || null;
+    function resetProfile() {
+        localStorage.removeItem('tg_user_name');
+        localStorage.removeItem('tg_bot_token');
+        localStorage.removeItem('tg_chat_id');
+        location.reload();
     }
 
-    async function sendToTelegram(text, chatId) {
+    async function sendToTelegram(text) {
         const botToken = localStorage.getItem('tg_bot_token');
+        const chatId = localStorage.getItem('tg_chat_id');
         const url = `https://telegram.org{botToken}/sendMessage`;
         
         try {
@@ -150,7 +167,7 @@
             if (!data.ok) {
                 document.getElementById('status').innerText = `Ошибка Telegram: ${data.description}`;
             } else {
-                document.getElementById('status').innerText = "✅ Отправлено в Telegram!";
+                document.getElementById('status').innerText = "✅ Отправлено в ваш Telegram!";
             }
         } catch (err) {
             document.getElementById('status').innerText = `Ошибка сети: ${err.message}`;
@@ -203,14 +220,8 @@
                         impedance = serviceData.getUint16(9, true);
                     }
 
-                    const numWeight = parseFloat(weight);
-                    const matchedUser = getUserByWeight(numWeight);
-                    const targetId = matchedUser ? matchedUser.chat_id : ADMIN_CHAT_ID;
-                    const header = matchedUser 
-                        ? `⚖️ **Новый замер для ${matchedUser.name}**` 
-                        : `⚖️ **Новый замер (неизвестный пользователь)**`;
-
-                    let msg = `${header}\n• Вес: \`${weight} кг\``;
+                    const userName = localStorage.getItem('tg_user_name') || 'Пользователь';
+                    let msg = `⚖️ **Новый замер (${userName})**\n• Вес: \`${weight} кг\``;
                     if (impedance && impedance > 0) {
                         msg += `\n• Импеданс: \`${impedance} Ом\``;
                     } else {
@@ -218,7 +229,7 @@
                     }
 
                     statusEl.innerText = "⏳ Вес зафиксирован, отправляю...";
-                    sendToTelegram(msg, targetId);
+                    sendToTelegram(msg);
                     scan.stop();
                     btn.disabled = false;
                 }
